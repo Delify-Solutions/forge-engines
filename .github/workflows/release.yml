@@ -19,12 +19,9 @@ jobs:
                     - runner: macos-14
                       arch: arm64
                       triple: darwin-arm64
-                    # x86_64 build is opt-in: macos-13 runners often queue
-                    # for 30+ minutes on the free tier. Re-enable once we're
-                    # ready to ship Intel binaries by uncommenting:
-                    # - runner: macos-13
-                    #   arch: x86_64
-                    #   triple: darwin-x64
+                    - runner: macos-13
+                      arch: x86_64
+                      triple: darwin-x64
 
         runs-on: ${{ matrix.runner }}
         name: build-${{ matrix.triple }}
