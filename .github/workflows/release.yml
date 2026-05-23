@@ -3,8 +3,10 @@ name: release-engine
 on:
     push:
         tags:
+            - 'apache-*'
             - 'dnsmasq-*'
             - 'nginx-*'
+            - 'openlitespeed-*'
             - 'php-*'
 
 permissions:
