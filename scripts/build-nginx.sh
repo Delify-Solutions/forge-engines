@@ -159,7 +159,7 @@ EOF
 cd "$REPO_ROOT"
 echo "==> creating $ARCHIVE"
 tar -czf "$ARCHIVE" -C "$BUILD/pkg" "nginx-${VERSION}"
-shasum -a 256 "$ARCHIVE" > "${ARCHIVE%.tar.gz}.sha256"
+( cd "$DIST" && shasum -a 256 "$(basename "$ARCHIVE")" > "$(basename "${ARCHIVE%.tar.gz}").sha256" )
 
 echo "==> done"
 echo "    archive: $ARCHIVE"

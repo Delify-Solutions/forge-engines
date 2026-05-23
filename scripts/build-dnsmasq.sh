@@ -75,7 +75,7 @@ EOF
 # Tar from the parent of the version dir so the archive expands to dnsmasq-<version>/.
 echo "==> creating $ARCHIVE"
 tar -czf "$ARCHIVE" -C "$BUILD/pkg" "dnsmasq-${VERSION}"
-shasum -a 256 "$ARCHIVE" > "${ARCHIVE%.tar.gz}.sha256"
+( cd "$DIST" && shasum -a 256 "$(basename "$ARCHIVE")" > "$(basename "${ARCHIVE%.tar.gz}").sha256" )
 
 echo "==> done"
 echo "    archive: $ARCHIVE"
