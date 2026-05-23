@@ -1,0 +1,123 @@
+name: release-engine
+
+on:
+    push:
+        tags:
+            - 'dnsmasq-*'
+            - 'nginx-*'
+            # php-* / php-fpm-* arrive in Phase A.2.
+
+permissions:
+    contents: write
+
+jobs:
+    build:
+        strategy:
+            fail-fast: false
+            matrix:
+                include:
+                    - runner: macos-14
+                      arch: arm64
+                      triple: darwin-arm64
+                    - runner: macos-13
+                      arch: x86_64
+                      triple: darwin-x64
+
+        runs-on: ${{ matrix.runner }}
+        name: build-${{ matrix.triple }}
+        steps:
+            - name: Checkout
+              uses: actions/checkout@v4
+
+            - name: Parse engine and version from tag
+              id: tag
+              shell: bash
+              run: |
+                  raw="${GITHUB_REF#refs/tags/}"
+                  # Engine = portion before the FIRST hyphen; version = the rest.
+                  # Works for "dnsmasq-2.90", "nginx-1.27.3", "php-fpm-8.3.14".
+                  engine="${raw%%-*}"
+                  version="${raw#*-}"
+                  case "$raw" in
+                      php-fpm-*)
+                          engine="php-fpm"
+                          version="${raw#php-fpm-}"
+                          ;;
+                  esac
+                  echo "engine=$engine"   >> "$GITHUB_OUTPUT"
+                  echo "version=$version" >> "$GITHUB_OUTPUT"
+                  echo "raw=$raw"         >> "$GITHUB_OUTPUT"
+
+            - name: Build ${{ steps.tag.outputs.engine }} ${{ steps.tag.outputs.version }}
+              shell: bash
+              run: |
+                  script="scripts/build-${{ steps.tag.outputs.engine }}.sh"
+                  if [ ! -x "$script" ]; then
+                      echo "no build script for engine '${{ steps.tag.outputs.engine }}' at $script" >&2
+                      exit 1
+                  fi
+                  "$script" "${{ steps.tag.outputs.version }}"
+
+            - name: Upload artifact
+              uses: actions/upload-artifact@v4
+              with:
+                  name: ${{ steps.tag.outputs.raw }}-${{ matrix.triple }}
+                  path: |
+                      dist/${{ steps.tag.outputs.engine }}-${{ steps.tag.outputs.version }}-${{ matrix.triple }}.tar.gz
+                      dist/${{ steps.tag.outputs.engine }}-${{ steps.tag.outputs.version }}-${{ matrix.triple }}.sha256
+                  if-no-files-found: error
+                  retention-days: 7
+
+    release:
+        needs: build
+        runs-on: ubuntu-latest
+        name: publish-release
+        steps:
+            - name: Checkout
+              uses: actions/checkout@v4
+
+            - name: Parse engine and version from tag
+              id: tag
+              shell: bash
+              run: |
+                  raw="${GITHUB_REF#refs/tags/}"
+                  engine="${raw%%-*}"
+                  version="${raw#*-}"
+                  case "$raw" in
+                      php-fpm-*)
+                          engine="php-fpm"
+                          version="${raw#php-fpm-}"
+                          ;;
+                  esac
+                  echo "engine=$engine"   >> "$GITHUB_OUTPUT"
+                  echo "version=$version" >> "$GITHUB_OUTPUT"
+                  echo "raw=$raw"         >> "$GITHUB_OUTPUT"
+
+            - name: Download artifacts
+              uses: actions/download-artifact@v4
+              with:
+                  path: dist
+                  pattern: ${{ steps.tag.outputs.raw }}-*
+                  merge-multiple: true
+
+            - name: List artefacts
+              run: ls -la dist
+
+            - name: Publish GitHub Release
+              uses: softprops/action-gh-release@v2
+              with:
+                  tag_name: ${{ steps.tag.outputs.raw }}
+                  name: ${{ steps.tag.outputs.engine }} ${{ steps.tag.outputs.version }}
+                  body: |
+                      Prebuilt binaries for **${{ steps.tag.outputs.engine }} ${{ steps.tag.outputs.version }}** on macOS.
+
+                      Both architectures are statically built where applicable so the binary runs without Homebrew or other system dependencies. Forge consumes these archives via `bundle::catalog()` — see https://github.com/Delify-Solutions/forge.
+
+                      | Arch  | File |
+                      | ----- | ---- |
+                      | arm64 | `${{ steps.tag.outputs.engine }}-${{ steps.tag.outputs.version }}-darwin-arm64.tar.gz` |
+                      | x64   | `${{ steps.tag.outputs.engine }}-${{ steps.tag.outputs.version }}-darwin-x64.tar.gz`   |
+                  files: |
+                      dist/*.tar.gz
+                      dist/*.sha256
+                  fail_on_unmatched_files: true
