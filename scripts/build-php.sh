@@ -24,11 +24,13 @@ case "$ARCH" in
     *) echo "unsupported arch: $ARCH" >&2; exit 1 ;;
 esac
 
-# static-php-cli v3 nightly binary. Pin a specific dated build later if
-# we hit reproducibility issues — for now nightly is the recommended one.
-SPC_URL="https://dl.static-php.dev/v3/spc-bin/nightly/spc-macos-${SPC_ARCH}"
+# Pin static-php-cli to a stable release. Bumping requires a new
+# php-<ver>-r<n> tag so installs remain reproducible.
+SPC_VERSION="2.8.5"
+SPC_URL="https://github.com/crazywhalecc/static-php-cli/releases/download/${SPC_VERSION}/spc-macos-${SPC_ARCH}.tar.gz"
 
-# Extensions to bake in. Mirrors a reasonable Laravel/Symfony baseline.
+# Php-version targeted by craft.yml. We mirror a Laravel/Symfony-friendly
+# baseline; users can opt into more later via project-level php.ini.
 EXTENSIONS="bcmath,bz2,calendar,ctype,curl,dba,dom,exif,fileinfo,filter,gd,gmp,iconv,intl,mbstring,mbregex,mysqli,mysqlnd,opcache,openssl,pcntl,pdo,pdo_mysql,pdo_pgsql,pdo_sqlite,pgsql,phar,posix,readline,session,shmop,simplexml,soap,sockets,sodium,sqlite3,sysvmsg,sysvsem,sysvshm,tokenizer,xml,xmlreader,xmlwriter,zip,zlib"
 
 PKG_DIR="$BUILD/pkg/php-${VERSION}"
@@ -37,23 +39,38 @@ ARCHIVE="$DIST/php-${VERSION}-${TRIPLE}.tar.gz"
 mkdir -p "$BUILD" "$DIST"
 
 if [ ! -x "$BUILD/spc" ]; then
-    echo "==> downloading static-php-cli ($SPC_ARCH)"
-    curl -fsSL --retry 3 -o "$BUILD/spc" "$SPC_URL"
+    echo "==> downloading static-php-cli ${SPC_VERSION} (${SPC_ARCH})"
+    curl -fsSL --retry 5 -o "$BUILD/spc.tar.gz" "$SPC_URL"
+    tar -xzf "$BUILD/spc.tar.gz" -C "$BUILD"
+    rm -f "$BUILD/spc.tar.gz"
     chmod +x "$BUILD/spc"
 fi
 
 cd "$BUILD"
 
-echo "==> spc doctor"
-./spc doctor --auto-fix || {
-    echo "WARN: spc doctor reported issues; continuing — CI runners are expected to have base toolchain"
-}
+# CI runners (macos-14) ship Homebrew already; install the toolchain spc
+# expects once, up-front, instead of relying on `spc doctor --auto-fix`
+# which fetches binaries that occasionally 404 on a flaky network.
+echo "==> brew prerequisites"
+brew install pkg-config automake autoconf libtool re2c bison flex || true
 
-echo "==> spc download (php=$VERSION, extensions: $EXTENSIONS)"
-./spc download --with-php="$VERSION" --for-extensions="$EXTENSIONS" --prefer-pre-built
+# Declarative craft.yml — see https://static-php.dev for the schema.
+cat > "$BUILD/craft.yml" <<EOF
+php-version: $VERSION
+extensions: "$EXTENSIONS"
+sapi:
+  - cli
+  - fpm
+download-options:
+  retry: 5
+  prefer-pre-built: false
+EOF
 
-echo "==> spc build (CLI + FPM)"
-./spc build "$EXTENSIONS" --build-cli --build-fpm
+echo "==> craft.yml:"
+cat "$BUILD/craft.yml"
+
+echo "==> spc craft"
+./spc craft --debug
 
 echo "==> packaging"
 rm -rf "$PKG_DIR"
@@ -66,15 +83,23 @@ if [ ! -f "$BUILD/buildroot/bin/php" ]; then
 fi
 
 cp "$BUILD/buildroot/bin/php" "$PKG_DIR/bin/php"
-cp "$BUILD/buildroot/bin/php-fpm" "$PKG_DIR/sbin/php-fpm"
+if [ -f "$BUILD/buildroot/bin/php-fpm" ]; then
+    cp "$BUILD/buildroot/bin/php-fpm" "$PKG_DIR/sbin/php-fpm"
+elif [ -f "$BUILD/buildroot/sbin/php-fpm" ]; then
+    cp "$BUILD/buildroot/sbin/php-fpm" "$PKG_DIR/sbin/php-fpm"
+else
+    echo "FATAL: php-fpm binary not found in buildroot" >&2
+    find "$BUILD/buildroot" -name 'php-fpm' >&2 || true
+    exit 1
+fi
 strip -x "$PKG_DIR/bin/php" "$PKG_DIR/sbin/php-fpm" 2>/dev/null || true
 
 cat > "$PKG_DIR/README.md" <<EOF
 # PHP $VERSION (built for Delify Forge)
 
 Built with [static-php-cli](https://github.com/crazywhalecc/static-php-cli)
-v3, producing fully static binaries that have no external dependencies
-beyond libSystem.
+$SPC_VERSION, producing fully static binaries that have no external
+dependencies beyond libSystem.
 
 Architecture: $TRIPLE
 Build host: $(uname -mrs)
