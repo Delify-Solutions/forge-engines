@@ -5,7 +5,7 @@ on:
         tags:
             - 'dnsmasq-*'
             - 'nginx-*'
-            # php-* / php-fpm-* arrive in Phase A.2.
+            - 'php-*'
 
 permissions:
     contents: write
@@ -37,16 +37,8 @@ jobs:
               shell: bash
               run: |
                   raw="${GITHUB_REF#refs/tags/}"
-                  # Engine = portion before the FIRST hyphen; version = the rest.
-                  # Works for "dnsmasq-2.90", "nginx-1.27.3", "php-fpm-8.3.14".
                   engine="${raw%%-*}"
                   version="${raw#*-}"
-                  case "$raw" in
-                      php-fpm-*)
-                          engine="php-fpm"
-                          version="${raw#php-fpm-}"
-                          ;;
-                  esac
                   echo "engine=$engine"   >> "$GITHUB_OUTPUT"
                   echo "version=$version" >> "$GITHUB_OUTPUT"
                   echo "raw=$raw"         >> "$GITHUB_OUTPUT"
@@ -86,12 +78,6 @@ jobs:
                   raw="${GITHUB_REF#refs/tags/}"
                   engine="${raw%%-*}"
                   version="${raw#*-}"
-                  case "$raw" in
-                      php-fpm-*)
-                          engine="php-fpm"
-                          version="${raw#php-fpm-}"
-                          ;;
-                  esac
                   echo "engine=$engine"   >> "$GITHUB_OUTPUT"
                   echo "version=$version" >> "$GITHUB_OUTPUT"
                   echo "raw=$raw"         >> "$GITHUB_OUTPUT"
