@@ -45,6 +45,12 @@ jobs:
 
             - name: Build ${{ steps.tag.outputs.engine }} ${{ steps.tag.outputs.version }}
               shell: bash
+              env:
+                  # static-php-cli queries GitHub for upstream library
+                  # versions; without auth the runner hits the 60req/h
+                  # anonymous rate limit. Forwarding the workflow token
+                  # gives us the higher per-actor budget.
+                  GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
               run: |
                   script="scripts/build-${{ steps.tag.outputs.engine }}.sh"
                   if [ ! -x "$script" ]; then
