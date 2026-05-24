@@ -39,15 +39,18 @@ esac
 APR_VERSION="1.7.5"
 APR_UTIL_VERSION="1.6.3"
 PCRE2_VERSION="10.44"
+ZLIB_VERSION="1.3.1"
 
 HTTPD_URL="https://archive.apache.org/dist/httpd/httpd-${VERSION}.tar.gz"
 APR_URL="https://archive.apache.org/dist/apr/apr-${APR_VERSION}.tar.gz"
 APR_UTIL_URL="https://archive.apache.org/dist/apr/apr-util-${APR_UTIL_VERSION}.tar.gz"
 PCRE2_URL="https://github.com/PCRE2Project/pcre2/releases/download/pcre2-${PCRE2_VERSION}/pcre2-${PCRE2_VERSION}.tar.gz"
+ZLIB_URL="https://zlib.net/fossils/zlib-${ZLIB_VERSION}.tar.gz"
 
 PKG_DIR="$BUILD/pkg/apache-${VERSION}"
 ARCHIVE="$DIST/apache-${VERSION}-${TRIPLE}.tar.gz"
 PCRE2_PREFIX="$BUILD/pcre2-built"
+ZLIB_PREFIX="$BUILD/zlib-built"
 
 # httpd's --prefix is baked into the binary as a default ServerRoot, but at
 # runtime Forge always invokes `httpd -d <actual-root>`, so the compiled-in
@@ -79,21 +82,25 @@ HTTPD_TAR="$BUILD/httpd-${VERSION}.tar.gz"
 APR_TAR="$BUILD/apr-${APR_VERSION}.tar.gz"
 APR_UTIL_TAR="$BUILD/apr-util-${APR_UTIL_VERSION}.tar.gz"
 PCRE2_TAR="$BUILD/pcre2-${PCRE2_VERSION}.tar.gz"
+ZLIB_TAR="$BUILD/zlib-${ZLIB_VERSION}.tar.gz"
 
 fetch "$HTTPD_URL" "$HTTPD_TAR"
 fetch "$APR_URL" "$APR_TAR"
 fetch "$APR_UTIL_URL" "$APR_UTIL_TAR"
 fetch "$PCRE2_URL" "$PCRE2_TAR"
+fetch "$ZLIB_URL" "$ZLIB_TAR"
 
 extract_once "$HTTPD_TAR" "$BUILD" "httpd-${VERSION}"
 extract_once "$APR_TAR" "$BUILD" "apr-${APR_VERSION}"
 extract_once "$APR_UTIL_TAR" "$BUILD" "apr-util-${APR_UTIL_VERSION}"
 extract_once "$PCRE2_TAR" "$BUILD" "pcre2-${PCRE2_VERSION}"
+extract_once "$ZLIB_TAR" "$BUILD" "zlib-${ZLIB_VERSION}"
 
 HTTPD_SRC="$BUILD/httpd-${VERSION}"
 APR_SRC="$BUILD/apr-${APR_VERSION}"
 APR_UTIL_SRC="$BUILD/apr-util-${APR_UTIL_VERSION}"
 PCRE2_SRC="$BUILD/pcre2-${PCRE2_VERSION}"
+ZLIB_SRC="$BUILD/zlib-${ZLIB_VERSION}"
 
 # --- 1. Build PCRE2 standalone ---
 
@@ -107,6 +114,20 @@ if [ ! -f "$PCRE2_PREFIX/lib/libpcre2-8.a" ]; then
         --enable-jit \
         CFLAGS="-O2 -arch $ARCH -mmacosx-version-min=11.0" \
         LDFLAGS="-arch $ARCH"
+    make -j"$JOBS"
+    make install
+fi
+
+# --- 1b. Build zlib standalone (mod_deflate dependency) ---
+
+if [ ! -f "$ZLIB_PREFIX/lib/libz.a" ]; then
+    echo "==> building zlib ${ZLIB_VERSION}"
+    cd "$ZLIB_SRC"
+    CFLAGS="-O2 -arch $ARCH -mmacosx-version-min=11.0" \
+    LDFLAGS="-arch $ARCH" \
+    ./configure \
+        --prefix="$ZLIB_PREFIX" \
+        --static
     make -j"$JOBS"
     make install
 fi
@@ -132,6 +153,7 @@ cd "$HTTPD_SRC"
     --prefix="$PREFIX_DUMMY" \
     --with-included-apr \
     --with-pcre="$PCRE2_PREFIX/bin/pcre2-config" \
+    --with-z="$ZLIB_PREFIX" \
     --enable-mods-shared=most \
     --enable-proxy \
     --enable-proxy-fcgi \
@@ -139,11 +161,11 @@ cd "$HTTPD_SRC"
     --enable-headers \
     --enable-deflate \
     --enable-expires \
-    --enable-ssl \
+    --disable-ssl \
     --enable-so \
     --with-mpm=event \
-    CFLAGS="-O2 -arch $ARCH -mmacosx-version-min=11.0" \
-    LDFLAGS="-arch $ARCH"
+    CFLAGS="-O2 -arch $ARCH -mmacosx-version-min=11.0 -I$ZLIB_PREFIX/include" \
+    LDFLAGS="-arch $ARCH -L$ZLIB_PREFIX/lib"
 
 echo "==> building httpd"
 make -j"$JOBS"
@@ -197,6 +219,7 @@ Built with:
 - APR $APR_VERSION
 - APR-util $APR_UTIL_VERSION
 - PCRE2 $PCRE2_VERSION
+- zlib $ZLIB_VERSION
 
 Architecture: $TRIPLE
 Build host: $(uname -mrs)
@@ -207,9 +230,10 @@ Upstream sources:
 - APR:       $APR_URL
 - APR-util:  $APR_UTIL_URL
 - PCRE2:     $PCRE2_URL
+- zlib:      $ZLIB_URL
 
 Upstream license: Apache httpd is Apache-2.0; bundled deps under their
-respective licenses (APR: Apache-2.0, PCRE2: BSD-3-Clause).
+respective licenses (APR: Apache-2.0, PCRE2: BSD-3-Clause, zlib: zlib license).
 EOF
 
 # --- 7. Create archive + checksum ---
