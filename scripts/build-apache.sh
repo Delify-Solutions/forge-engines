@@ -41,9 +41,12 @@ APR_UTIL_VERSION="1.6.3"
 PCRE2_VERSION="10.44"
 ZLIB_VERSION="1.3.1"
 
-HTTPD_URL="https://archive.apache.org/dist/httpd/httpd-${VERSION}.tar.gz"
-APR_URL="https://archive.apache.org/dist/apr/apr-${APR_VERSION}.tar.gz"
-APR_UTIL_URL="https://archive.apache.org/dist/apr/apr-util-${APR_UTIL_VERSION}.tar.gz"
+HTTPD_URL="https://downloads.apache.org/httpd/httpd-${VERSION}.tar.gz"
+HTTPD_URL_FALLBACK="https://archive.apache.org/dist/httpd/httpd-${VERSION}.tar.gz"
+APR_URL="https://downloads.apache.org/apr/apr-${APR_VERSION}.tar.gz"
+APR_URL_FALLBACK="https://archive.apache.org/dist/apr/apr-${APR_VERSION}.tar.gz"
+APR_UTIL_URL="https://downloads.apache.org/apr/apr-util-${APR_UTIL_VERSION}.tar.gz"
+APR_UTIL_URL_FALLBACK="https://archive.apache.org/dist/apr/apr-util-${APR_UTIL_VERSION}.tar.gz"
 PCRE2_URL="https://github.com/PCRE2Project/pcre2/releases/download/pcre2-${PCRE2_VERSION}/pcre2-${PCRE2_VERSION}.tar.gz"
 ZLIB_URL="https://zlib.net/fossils/zlib-${ZLIB_VERSION}.tar.gz"
 
@@ -61,10 +64,17 @@ JOBS="$(sysctl -n hw.ncpu)"
 mkdir -p "$BUILD" "$DIST"
 
 fetch() {
-    local url="$1" out="$2"
+    local url="$1" out="$2" fallback="${3:-}"
     if [ ! -f "$out" ]; then
         echo "==> fetching $url"
-        curl -fsSL --retry 3 -o "$out" "$url"
+        if ! curl -fsSL --retry 5 --retry-delay 5 --retry-all-errors --connect-timeout 30 --max-time 600 -o "$out" "$url"; then
+            if [ -n "$fallback" ]; then
+                echo "==> primary failed, fetching fallback $fallback"
+                curl -fsSL --retry 5 --retry-delay 5 --retry-all-errors --connect-timeout 30 --max-time 600 -o "$out" "$fallback"
+            else
+                return 1
+            fi
+        fi
     fi
 }
 
@@ -84,9 +94,9 @@ APR_UTIL_TAR="$BUILD/apr-util-${APR_UTIL_VERSION}.tar.gz"
 PCRE2_TAR="$BUILD/pcre2-${PCRE2_VERSION}.tar.gz"
 ZLIB_TAR="$BUILD/zlib-${ZLIB_VERSION}.tar.gz"
 
-fetch "$HTTPD_URL" "$HTTPD_TAR"
-fetch "$APR_URL" "$APR_TAR"
-fetch "$APR_UTIL_URL" "$APR_UTIL_TAR"
+fetch "$HTTPD_URL" "$HTTPD_TAR" "$HTTPD_URL_FALLBACK"
+fetch "$APR_URL" "$APR_TAR" "$APR_URL_FALLBACK"
+fetch "$APR_UTIL_URL" "$APR_UTIL_TAR" "$APR_UTIL_URL_FALLBACK"
 fetch "$PCRE2_URL" "$PCRE2_TAR"
 fetch "$ZLIB_URL" "$ZLIB_TAR"
 
