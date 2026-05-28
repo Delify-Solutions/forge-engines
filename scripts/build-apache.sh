@@ -205,6 +205,15 @@ if [ -d "$STAGED/modules" ]; then
     cp "$STAGED/modules"/*.so "$PKG_DIR/modules/" 2>/dev/null || true
 fi
 
+# Bundled shared libraries (APR + APR-util built via --with-included-apr).
+# httpd's compiled-in install names point at $PREFIX_DUMMY/lib/, which doesn't
+# exist on user machines — we copy them in and rewrite the names below.
+mkdir -p "$PKG_DIR/lib"
+if [ -d "$STAGED/lib" ]; then
+    cp -RP "$STAGED/lib"/libapr-*.dylib    "$PKG_DIR/lib/" 2>/dev/null || true
+    cp -RP "$STAGED/lib"/libaprutil-*.dylib "$PKG_DIR/lib/" 2>/dev/null || true
+fi
+
 # Default config files (Forge generates its own httpd.conf but these are
 # useful as reference and for include directives)
 cp "$STAGED/conf/httpd.conf" "$PKG_DIR/conf/httpd.conf" 2>/dev/null || true
@@ -212,15 +221,96 @@ cp "$STAGED/conf/mime.types" "$PKG_DIR/conf/mime.types" 2>/dev/null || true
 cp "$STAGED/conf/magic" "$PKG_DIR/conf/magic" 2>/dev/null || true
 cp "$STAGED/conf/extra/httpd-default.conf" "$PKG_DIR/conf/httpd-default.conf" 2>/dev/null || true
 
-# --- 5. Strip binaries ---
+# --- 5. Rewrite install names so the bundle is relocatable ---
+#
+# httpd was configured with --prefix=$PREFIX_DUMMY, so every Mach-O object
+# encodes absolute paths like $PREFIX_DUMMY/lib/libapr-1.0.dylib. Rewrite to
+# @rpath and add @loader_path/../lib so dyld resolves from inside the bundle.
+
+echo "==> rewriting install names"
+
+# Each dylib in lib/: set its own ID, then rewrite cross-lib references.
+for dylib in "$PKG_DIR/lib"/*.dylib; do
+    [ -L "$dylib" ] && continue
+    [ ! -f "$dylib" ] && continue
+    base="$(basename "$dylib")"
+    install_name_tool -id "@rpath/$base" "$dylib"
+    while IFS= read -r dep; do
+        case "$dep" in
+            "$PREFIX_DUMMY/lib/"*)
+                dep_base="$(basename "$dep")"
+                install_name_tool -change "$dep" "@rpath/$dep_base" "$dylib"
+                ;;
+        esac
+    done < <(otool -L "$dylib" | awk 'NR > 1 {print $1}')
+done
+
+rewrite_macho() {
+    local target="$1"
+    [ ! -f "$target" ] && return 0
+    while IFS= read -r dep; do
+        case "$dep" in
+            "$PREFIX_DUMMY/lib/"*)
+                dep_base="$(basename "$dep")"
+                install_name_tool -change "$dep" "@rpath/$dep_base" "$target"
+                ;;
+        esac
+    done < <(otool -L "$target" | awk 'NR > 1 {print $1}')
+    install_name_tool -add_rpath "@loader_path/../lib" "$target" 2>/dev/null || true
+}
+
+rewrite_macho "$PKG_DIR/sbin/httpd"
+for bin in "$PKG_DIR/bin"/*; do
+    [ -f "$bin" ] && rewrite_macho "$bin"
+done
+for mod in "$PKG_DIR/modules"/*.so; do
+    [ -f "$mod" ] && rewrite_macho "$mod"
+done
+
+# --- 6. Strip binaries (after rewrite — install_name_tool invalidates the
+#     previous strip's signature/checksums) ---
 
 echo "==> stripping binaries"
 strip -x "$PKG_DIR/sbin/httpd" || true
 for bin in "$PKG_DIR/bin"/*; do
     [ -f "$bin" ] && strip -x "$bin" || true
 done
+for mod in "$PKG_DIR/modules"/*.so; do
+    [ -f "$mod" ] && strip -x "$mod" || true
+done
+for dylib in "$PKG_DIR/lib"/*.dylib; do
+    [ -L "$dylib" ] && continue
+    [ -f "$dylib" ] && strip -x "$dylib" || true
+done
 
-# --- 6. README ---
+# --- 6b. Smoke test: every dependency must resolve from inside the bundle
+#     or from system paths. A leftover $PREFIX_DUMMY reference means the
+#     install-name rewrite missed something — fail the build now rather than
+#     ship a broken tarball. ---
+
+echo "==> smoke-testing bundle relocatability"
+SMOKE_FAIL=0
+for target in "$PKG_DIR/sbin/httpd" "$PKG_DIR/bin"/* "$PKG_DIR/modules"/*.so "$PKG_DIR/lib"/*.dylib; do
+    [ -L "$target" ] && continue
+    [ ! -f "$target" ] && continue
+    if otool -L "$target" 2>/dev/null | awk 'NR > 1 {print $1}' | grep -q "^$PREFIX_DUMMY"; then
+        echo "  FAIL: $target still references $PREFIX_DUMMY" >&2
+        otool -L "$target" >&2
+        SMOKE_FAIL=1
+    fi
+done
+if [ "$SMOKE_FAIL" -ne 0 ]; then
+    echo "==> bundle has unresolved compile-time paths; aborting" >&2
+    exit 1
+fi
+
+if ! "$PKG_DIR/sbin/httpd" -v >/dev/null 2>&1; then
+    echo "==> httpd -v failed to run from packaged tree" >&2
+    "$PKG_DIR/sbin/httpd" -v
+    exit 1
+fi
+
+# --- 7. README ---
 
 cat > "$PKG_DIR/README.md" <<EOF
 # Apache httpd $VERSION (built for Delify Forge)
@@ -246,7 +336,7 @@ Upstream license: Apache httpd is Apache-2.0; bundled deps under their
 respective licenses (APR: Apache-2.0, PCRE2: BSD-3-Clause, zlib: zlib license).
 EOF
 
-# --- 7. Create archive + checksum ---
+# --- 8. Create archive + checksum ---
 
 cd "$REPO_ROOT"
 echo "==> creating $ARCHIVE"
